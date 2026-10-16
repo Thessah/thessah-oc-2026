@@ -1,0 +1,358 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import Link from 'next/link'
+import Image from 'next/image'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { fetchProducts } from '@/lib/features/product/productSlice'
+import axios from 'axios'
+
+const getImageSrc = (product) => {
+  if (Array.isArray(product?.images) && product.images.length > 0) {
+    const first = product.images[0]
+    if (typeof first === 'string' && first) return first
+    if (first?.url) return first.url
+    if (first?.src) return first.src
+  }
+  return 'https://ik.imagekit.io/jrstupuke/placeholder.png'
+}
+
+const getSecondImageSrc = (product) => {
+  if (Array.isArray(product?.images) && product.images.length > 1) {
+    const second = product.images[1]
+    if (typeof second === 'string' && second) return second
+    if (second?.url) return second.url
+    if (second?.src) return second.src
+  }
+  return null
+}
+
+const formatPrice = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return `AED ${Math.round(n)}`
+}
+
+const normalize = (value) => String(value || '').trim().toLowerCase()
+
+export default function AuspiciousProductsCarousel() {
+  const dispatch = useDispatch()
+  const list = useSelector((state) => state.product.list || [])
+  const railRef = useRef(null)
+  const isPointerDownRef = useRef(false)
+  const isDraggingRef = useRef(false)
+  const suppressClickRef = useRef(false)
+  const dragStartXRef = useRef(0)
+  const dragStartScrollLeftRef = useRef(0)
+  const [heading, setHeading] = useState({
+    title: 'For an Auspicious Beginning',
+    subtitle: 'Discover our most-loved designs, curated for this Akshaya Tritiya',
+    image: '',
+    visible: true
+  })
+  const [selectedCategoryNames, setSelectedCategoryNames] = useState([])
+  const [productsLoading, setProductsLoading] = useState(list.length === 0)
+  const [settingsLoading, setSettingsLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+
+    const loadProducts = async () => {
+      if (list.length === 0) {
+        setProductsLoading(true)
+        try {
+          await dispatch(fetchProducts({ limit: 48 })).unwrap()
+        } catch {
+          // Keep section resilient; show no cards if fetch fails.
+        } finally {
+          if (active) {
+            setProductsLoading(false)
+          }
+        }
+      } else {
+        setProductsLoading(false)
+      }
+    }
+
+    loadProducts()
+
+    return () => {
+      active = false
+    }
+  }, [dispatch, list.length])
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const { data } = await axios.get('/api/store/settings')
+        const settings = data?.settings || {}
+
+        if (settings?.section8Heading) {
+          setHeading((prev) => ({
+            ...prev,
+            ...settings.section8Heading
+          }))
+        }
+
+        const display = settings?.section8Display || {}
+        const names = Array.isArray(display?.selectedCategoryNames)
+          ? display.selectedCategoryNames.filter(Boolean)
+          : []
+        setSelectedCategoryNames(names)
+      } catch (error) {
+        console.error('Failed to load section 8 settings:', error)
+      } finally {
+        setSettingsLoading(false)
+      }
+    }
+
+    loadSettings()
+  }, [])
+
+  const products = useMemo(() => {
+    const base = list.filter((p) => p && (p._id || p.id) && (p.slug || p._id || p.id))
+
+    if (selectedCategoryNames.length === 0) {
+      return base.slice(0, 12)
+    }
+
+    const orderedNames = selectedCategoryNames.map(normalize).filter(Boolean)
+    const buckets = orderedNames.map((cat) =>
+      base.filter((p) => normalize(p?.category) === cat)
+    )
+
+    const mixed = []
+    let progressed = true
+    while (mixed.length < 12 && progressed) {
+      progressed = false
+      for (const bucket of buckets) {
+        if (bucket.length > 0) {
+          mixed.push(bucket.shift())
+          progressed = true
+          if (mixed.length >= 12) break
+        }
+      }
+    }
+
+    return mixed.length > 0 ? mixed : base.slice(0, 12)
+  }, [list, selectedCategoryNames])
+
+  const isLoading = productsLoading || settingsLoading
+
+  if (heading.visible === false) return null
+
+  if (!isLoading && products.length === 0) return null
+
+  const scrollByCards = (direction) => {
+    if (!railRef.current) return
+    const card = railRef.current.querySelector('[data-card]')
+    if (!card) return
+    const gap = 20
+    const amount = card.clientWidth + gap
+    railRef.current.scrollBy({
+      left: direction === 'left' ? -amount : amount,
+      behavior: 'smooth'
+    })
+  }
+
+  const handleRailMouseDown = (event) => {
+    if (!railRef.current) return
+    isPointerDownRef.current = true
+    isDraggingRef.current = false
+    dragStartXRef.current = event.pageX
+    dragStartScrollLeftRef.current = railRef.current.scrollLeft
+    railRef.current.classList.add('cursor-grab')
+  }
+
+  const handleRailMouseMove = (event) => {
+    if (!railRef.current || !isPointerDownRef.current) return
+    const delta = event.pageX - dragStartXRef.current
+
+    // Ignore tiny movement so a normal click does not start sliding.
+    if (!isDraggingRef.current && Math.abs(delta) < 8) {
+      return
+    }
+
+    if (!isDraggingRef.current) {
+      isDraggingRef.current = true
+      railRef.current.classList.add('cursor-grabbing')
+      railRef.current.classList.remove('cursor-grab')
+      railRef.current.classList.add('snap-none')
+    }
+
+    event.preventDefault()
+    railRef.current.scrollLeft = dragStartScrollLeftRef.current - delta
+  }
+
+  const endRailDrag = () => {
+    if (!railRef.current) return
+    if (!isPointerDownRef.current) return
+
+    isPointerDownRef.current = false
+    const hadDragged = isDraggingRef.current
+    isDraggingRef.current = false
+    railRef.current.classList.remove('cursor-grabbing')
+    railRef.current.classList.add('cursor-grab')
+    railRef.current.classList.remove('snap-none')
+
+    if (hadDragged) {
+      suppressClickRef.current = true
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+  }
+
+  const handleRailWheel = (event) => {
+    if (!railRef.current) return
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+      event.preventDefault()
+      railRef.current.scrollLeft += event.deltaY
+    }
+  }
+
+  const handleRailDragStart = (event) => {
+    event.preventDefault()
+  }
+
+  const handleRailClickCapture = (event) => {
+    if (!suppressClickRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  return (
+    <section className="w-full bg-[#f7f7f7] py-10 sm:py-12">
+      <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="relative text-center mb-7 sm:mb-9">
+          {isLoading ? (
+            <>
+              <div className="h-[44px] sm:h-[60px] w-[340px] sm:w-[620px] max-w-full mx-auto rounded-lg bg-gray-200 animate-pulse" />
+              <div className="h-7 sm:h-8 mt-3 w-[300px] sm:w-[720px] max-w-full mx-auto rounded-lg bg-gray-200 animate-pulse" />
+            </>
+          ) : (
+            <>
+              <h2 className="text-[36px] sm:text-[52px] leading-tight font-serif text-[#2f0d12]">
+                {heading.title || 'For an Auspicious Beginning'}
+              </h2>
+              <p className="text-[16px] sm:text-[22px] mt-1 text-[#9d8576] font-light leading-tight max-w-[900px] mx-auto">
+                {heading.subtitle || 'Discover our most-loved designs, curated for this Akshaya Tritiya'}
+              </p>
+            </>
+          )}
+
+          {!isLoading && heading.image && (
+            <div className="mt-4 mx-auto w-full max-w-[540px]">
+              <div className="relative h-[120px] sm:h-[160px] rounded-xl overflow-hidden shadow-sm">
+                <Image
+                  src={heading.image}
+                  alt={heading.title || 'Section 8 banner'}
+                  fill
+                  className="object-cover"
+                  sizes="(max-width: 640px) 100vw, 540px"
+                />
+              </div>
+            </div>
+          )}
+
+          {!isLoading && (
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 hidden md:flex items-center gap-4">
+              <button
+                onClick={() => scrollByCards('left')}
+                className="p-1.5 text-[#8c6a66] hover:text-[#5b2726] transition"
+                aria-label="Previous products"
+              >
+                <ChevronLeft size={26} />
+              </button>
+              <button
+                onClick={() => scrollByCards('right')}
+                className="p-1.5 text-[#8c6a66] hover:text-[#5b2726] transition"
+                aria-label="Next products"
+              >
+                <ChevronRight size={26} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div
+          ref={railRef}
+          onMouseDown={handleRailMouseDown}
+          onMouseMove={handleRailMouseMove}
+          onMouseUp={endRailDrag}
+          onMouseLeave={endRailDrag}
+          onWheel={handleRailWheel}
+          onClickCapture={handleRailClickCapture}
+          onDragStart={handleRailDragStart}
+          className="flex gap-5 overflow-x-auto snap-x snap-proximity scroll-smooth pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden cursor-grab select-none"
+        >
+          {isLoading ? (
+            Array.from({ length: 4 }).map((_, idx) => (
+              <div key={idx} className="snap-start shrink-0 w-[76%] sm:w-[45%] lg:w-[24%]">
+                <div className="rounded-xl overflow-hidden bg-white shadow-sm">
+                  <div className="aspect-[4/4] bg-gray-200 animate-pulse" />
+                </div>
+                <div className="mt-3 h-5 w-3/4 bg-gray-200 rounded animate-pulse" />
+                <div className="mt-2 h-5 w-1/3 bg-gray-200 rounded animate-pulse" />
+              </div>
+            ))
+          ) : (
+            products.map((product) => {
+              const productName = product.name || product.title || 'Product'
+              const salePrice = Number(product.price)
+              const listPrice = Number(product.AED)
+              const priceText = formatPrice(salePrice > 0 ? salePrice : listPrice)
+              const firstImageSrc = getImageSrc(product)
+              const secondImageSrc = getSecondImageSrc(product)
+
+              return (
+                <Link
+                  key={product._id || product.id}
+                  href={`/product/${product.slug || product._id || product.id}`}
+                  data-card
+                  draggable={false}
+                  className="group snap-start shrink-0 w-[76%] sm:w-[45%] lg:w-[24%]"
+                >
+                  <div className="rounded-xl overflow-hidden bg-white shadow-sm hover:shadow-md transition">
+                    <div className="relative aspect-[4/4] bg-gray-100">
+                      <Image
+                        src={firstImageSrc}
+                        alt={productName}
+                        fill
+                        draggable={false}
+                        className={`object-cover will-change-transform will-change-opacity transition-all duration-700 ease-in-out ${
+                          secondImageSrc ? 'opacity-100 scale-100 group-hover:opacity-0 group-hover:scale-[1.02]' : 'opacity-100 scale-100'
+                        }`}
+                        sizes="(max-width: 640px) 76vw, (max-width: 1024px) 45vw, 24vw"
+                      />
+                      {secondImageSrc && (
+                        <Image
+                          src={secondImageSrc}
+                          alt={`${productName} alternate view`}
+                          fill
+                          draggable={false}
+                          className="object-cover opacity-0 scale-[1.02] group-hover:opacity-100 group-hover:scale-100 will-change-transform will-change-opacity transition-all duration-700 ease-in-out"
+                          sizes="(max-width: 640px) 76vw, (max-width: 1024px) 45vw, 24vw"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-[15px] sm:text-[17px] text-[#1f1b1b] font-serif truncate leading-tight">
+                    {productName}
+                  </p>
+                  {priceText && (
+                    <p className="text-[16px] sm:text-[18px] leading-tight text-[#1f1b1b] font-serif mt-1">
+                      {priceText}
+                    </p>
+                  )}
+                </Link>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}

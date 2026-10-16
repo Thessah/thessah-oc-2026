@@ -1,0 +1,184 @@
+import connectDB from "@/lib/mongoose";
+import Product from "@/models/Product";
+import Rating from "@/models/Rating";
+import { generateUniqueProductName, generateUniqueSlug } from "@/lib/productUniqueness";
+import { NextResponse } from "next/server";
+
+const escapeRegExp = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export async function POST(request) {
+    try {
+        await connectDB();
+        const body = await request.json();
+        const { name, description, shortDescription, AED, price, images, category, sku, inStock, hasVariants, variants, attributes, hasBulkPricing, bulkPricing, fastDelivery, allowReturn, allowReplacement, storeId, slug, enableEnquiry, goldType, goldWeight, goldRate, stoneWeight, stonePrice, makingCharges } = body;
+
+        const uniqueName = await generateUniqueProductName(Product, name, {
+            category,
+            notes: shortDescription || description,
+            useAI: true,
+        });
+        const productSlug = await generateUniqueSlug(Product, slug || uniqueName);
+
+        const product = await Product.create({
+            name: uniqueName,
+            slug: productSlug,
+            description,
+            shortDescription,
+            AED,
+            price,
+            images,
+            category,
+            sku,
+            inStock,
+            hasVariants,
+            variants,
+            attributes,
+            hasBulkPricing,
+            bulkPricing,
+            fastDelivery,
+            allowReturn,
+            allowReplacement,
+            storeId,
+            enableEnquiry,
+            goldType,
+            goldWeight,
+            goldRate,
+            stoneWeight,
+            stonePrice,
+            makingCharges,
+        });
+
+        return NextResponse.json({ product }, { status: 201 });
+    } catch (error) {
+        console.error('Error creating product:', error);
+        return NextResponse.json({ error: 'Error creating product', details: error.message, stack: error.stack }, { status: 500 });
+    }
+}
+
+
+export async function GET(request){
+    try {
+        await connectDB();
+        const { searchParams } = new URL(request.url);
+        const sortBy = searchParams.get('sortBy');
+        const limit = parseInt(searchParams.get('limit') || '50', 10); // increased default
+        const offset = parseInt(searchParams.get('offset') || '0', 10);
+        const compact = searchParams.get('compact') === 'true';
+        const fastDelivery = searchParams.get('fastDelivery');
+        const storeId = searchParams.get('storeId');
+        const category = searchParams.get('category');
+        const tag = searchParams.get('tag');
+        const q = searchParams.get('q');
+        
+        // Build query
+        const query = { listingStatus: { $ne: 'draft' } };
+        if (fastDelivery === 'true') {
+            query.fastDelivery = true;
+        }
+        if (storeId) {
+            query.storeId = storeId;
+        }
+        if (category) {
+            const normalizedCategory = decodeURIComponent(category).trim();
+            const humanCategory = normalizedCategory.replace(/-/g, ' ');
+            query.category = {
+                $regex: `^\\s*${escapeRegExp(humanCategory)}\\s*$`,
+                $options: 'i',
+            };
+        }
+        if (tag) {
+            query.tags = { $in: [tag] };
+        }
+        if (q && q.trim().length > 0) {
+            const regex = new RegExp(q.trim(), 'i');
+            query.$or = [
+                { name: regex },
+                { description: regex },
+                { shortDescription: regex },
+                { category: regex },
+                { tags: regex },
+            ];
+        }
+        
+        // Optimized query with field selection
+        const selectedFields = compact
+            ? 'name slug AED price images category sku barcode inStock stockQuantity createdAt showBuyButton showEnquiryButton targetAudience tags goldWeight goldRate stonePrice makingCharges attributes.goldPurityKarat'
+            : 'name slug description shortDescription AED price images category sku barcode inStock hasVariants variants attributes fastDelivery enableEnquiry showBuyButton showEnquiryButton stockQuantity createdAt tags targetAudience goldType goldWeight goldRate stoneWeight stonePrice makingCharges';
+
+        let products = await Product.find(query)
+            .select(selectedFields)
+            .sort({ createdAt: -1 })
+            .skip(offset)
+            .limit(limit)
+            .lean()
+            .exec();
+
+        const productIds = products.map((product) => String(product._id));
+        const ratingStats = productIds.length
+            ? await Rating.aggregate([
+                {
+                    $match: {
+                        approved: true,
+                        productId: { $in: productIds },
+                    },
+                },
+                {
+                    $group: {
+                        _id: '$productId',
+                        ratingCount: { $sum: 1 },
+                        averageRating: { $avg: '$rating' },
+                    },
+                },
+            ])
+            : [];
+
+        const ratingStatsMap = new Map(
+            ratingStats.map((entry) => [String(entry._id), entry])
+        );
+
+        products = products.map((product) => {
+            let label = null;
+            let labelType = null;
+
+            if (typeof product.AED === 'number' && typeof product.price === 'number' && product.AED > product.price) {
+                const discount = Math.round(((product.AED - product.price) / product.AED) * 100);
+                if (discount >= 50) {
+                    label = `Min. ${discount}% Off`;
+                    labelType = 'offer';
+                } else if (discount > 0) {
+                    label = `${discount}% Off`;
+                    labelType = 'offer';
+                }
+            }
+
+            const stats = ratingStatsMap.get(String(product._id));
+
+            return {
+                ...product,
+                label,
+                labelType,
+                ratingCount: stats?.ratingCount || 0,
+                averageRating: stats?.averageRating || 0,
+            };
+        });
+
+        // Sort based on the sortBy parameter
+        if (sortBy === 'orders') {
+            // Placeholder: implement order-based sorting if you have order data
+        } else if (sortBy === 'rating') {
+            // Placeholder: implement rating-based sorting if you have rating data
+        }
+
+        return NextResponse.json({ products }, {
+            headers: {
+                'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120'
+            }
+        });
+    } catch (error) {
+        console.error('Error in products API:', error);
+        if (error instanceof Error && error.stack) {
+            console.error('Stack trace:', error.stack);
+        }
+        return NextResponse.json({ error: "An internal server error occurred.", details: error.message, stack: error.stack }, { status: 500 });
+    }
+}

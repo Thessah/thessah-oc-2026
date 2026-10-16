@@ -1,0 +1,681 @@
+
+'use client'
+import { useAuth } from '@/lib/useAuth';
+
+export const dynamic = 'force-dynamic'
+import { useEffect, useState } from "react"
+import { useDispatch } from "react-redux"
+import { fetchProducts as fetchProductsAction } from "@/lib/features/product/productSlice"
+import { toast } from "react-hot-toast"
+import Image from "next/image"
+import Loading from "@/components/Loading"
+
+import axios from "axios"
+import ProductForm from "../add-product/page"
+
+
+
+export default function StoreManageProducts() {
+    const dispatch = useDispatch();
+
+    const { user, getToken } = useAuth();
+
+    const currency = process.env.NEXT_PUBLIC_CURRENCY_SYMBOL || 'AED'
+
+    const [loading, setLoading] = useState(true)
+    const [products, setProducts] = useState([])
+    const [buyNowFilter, setBuyNowFilter] = useState('all')
+    const [audienceFilter, setAudienceFilter] = useState('all')
+    const [pageSize, setPageSize] = useState(20)
+    const [currentPage, setCurrentPage] = useState(1)
+    const [editingProduct, setEditingProduct] = useState(null)
+    const [showEditModal, setShowEditModal] = useState(false)
+    const [showBuyNowSettingsModal, setShowBuyNowSettingsModal] = useState(false)
+    const [buyNowGlobalEnabled, setBuyNowGlobalEnabled] = useState(true)
+    const [buyNowGlobalDraft, setBuyNowGlobalDraft] = useState(true)
+    const [savingBuyNowSettings, setSavingBuyNowSettings] = useState(false)
+    const [listingFilter, setListingFilter] = useState('all')
+    const [selectedIds, setSelectedIds] = useState([])
+    const [bulkStock, setBulkStock] = useState('')
+    const [bulkListing, setBulkListing] = useState('')
+    const [bulkSaving, setBulkSaving] = useState(false)
+
+    const filteredProducts = products.filter((product) => {
+        const isBuyNowEnabled = product.showBuyButton === true
+        const matchesBuyNow = buyNowFilter === 'enabled'
+            ? isBuyNowEnabled
+            : buyNowFilter === 'disabled'
+                ? !isBuyNowEnabled
+                : true
+
+        const audience = Array.isArray(product.targetAudience) ? product.targetAudience : []
+        const matchesAudience = audienceFilter === 'all' ? true : audience.includes(audienceFilter)
+        const isDraft = product.listingStatus === 'draft'
+        const matchesListing = listingFilter === 'draft'
+            ? isDraft
+            : listingFilter === 'online'
+                ? !isDraft
+                : true
+
+        return matchesBuyNow && matchesAudience && matchesListing
+    })
+
+    const totalPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize))
+    const safeCurrentPage = Math.min(currentPage, totalPages)
+    const startIndex = (safeCurrentPage - 1) * pageSize
+    const endIndex = Math.min(startIndex + pageSize, filteredProducts.length)
+    const paginatedProducts = filteredProducts.slice(startIndex, endIndex)
+
+    const getVisiblePageItems = () => {
+        if (totalPages <= 8) {
+            return Array.from({ length: totalPages }, (_, idx) => idx + 1)
+        }
+
+        const pages = [1]
+        const start = Math.max(2, safeCurrentPage - 2)
+        const end = Math.min(totalPages - 1, safeCurrentPage + 2)
+
+        if (start > 2) pages.push('start-ellipsis')
+        for (let page = start; page <= end; page += 1) pages.push(page)
+        if (end < totalPages - 1) pages.push('end-ellipsis')
+
+        pages.push(totalPages)
+        return pages
+    }
+
+    const fetchStoreProducts = async () => {
+        try {
+             const token = await getToken()
+             const { data } = await axios.get('/api/store/product', {headers: { Authorization: `Bearer ${token}` } })
+             setProducts(data.products.sort((a, b)=> new Date(b.createdAt) - new Date(a.createdAt)))
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+        setLoading(false)
+    }
+
+    const fetchGlobalBuyNowSetting = async () => {
+        try {
+            const { data } = await axios.get('/api/store/settings')
+            const enabled = data?.settings?.buyNowGlobalEnabled !== false
+            setBuyNowGlobalEnabled(enabled)
+            setBuyNowGlobalDraft(enabled)
+        } catch {
+            setBuyNowGlobalEnabled(true)
+            setBuyNowGlobalDraft(true)
+        }
+    }
+
+    const saveGlobalBuyNowSetting = async () => {
+        try {
+            setSavingBuyNowSettings(true)
+            await axios.put('/api/store/settings', {
+                buyNowGlobalEnabled: buyNowGlobalDraft === true
+            })
+            setBuyNowGlobalEnabled(buyNowGlobalDraft === true)
+            localStorage.setItem('buyNowGlobalEnabled', buyNowGlobalDraft === true ? 'true' : 'false')
+            window.dispatchEvent(new CustomEvent('globalBuyNowSettingUpdated', {
+                detail: { enabled: buyNowGlobalDraft === true }
+            }))
+            setShowBuyNowSettingsModal(false)
+            toast.success(buyNowGlobalDraft ? 'Global Buy Now enabled' : 'Global Buy Now disabled for all products')
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message || 'Failed to update Buy Now settings')
+        } finally {
+            setSavingBuyNowSettings(false)
+        }
+    }
+
+    const toggleStock = async (productId) => {
+        try {
+            const token = await getToken()
+            const { data } = await axios.post('/api/store/stock-toggle',{ productId }, {headers: { Authorization: `Bearer ${token}` } })
+            setProducts(prevProducts => prevProducts.map(product =>  product._id === productId ? {...product, inStock: !product.inStock} : product))
+
+            toast.success(data.message)
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+    }
+
+    const toggleFastDelivery = async (productId) => {
+        try {
+            const token = await getToken()
+            const { data } = await axios.post('/api/store/fast-delivery-toggle', { productId }, {headers: { Authorization: `Bearer ${token}` } })
+            setProducts(prevProducts => prevProducts.map(product => 
+                product._id === productId ? {...product, fastDelivery: !product.fastDelivery} : product
+            ))
+            toast.success(data.message)
+            // Refresh global list so product pages see latest flags
+            dispatch(fetchProductsAction({}))
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+    }
+
+    const toggleEnquiry = async (productId) => {
+        try {
+            const token = await getToken()
+            const { data } = await axios.post('/api/store/enquiry-toggle', { productId }, {headers: { Authorization: `Bearer ${token}` } })
+            setProducts(prevProducts => prevProducts.map(product => 
+                product._id === productId ? {...product, enableEnquiry: !product.enableEnquiry} : product
+            ))
+            toast.success(data.message)
+            // Refresh global list so product pages see latest flags
+            dispatch(fetchProductsAction({}))
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+    }
+
+    const toggleBuyNow = async (productId) => {
+        try {
+            const token = await getToken()
+            const { data } = await axios.post('/api/store/buy-now-toggle', { productId }, {headers: { Authorization: `Bearer ${token}` } })
+            setProducts(prevProducts => prevProducts.map(product =>
+                product._id === productId ? {...product, showBuyButton: !product.showBuyButton} : product
+            ))
+            toast.success(data.message)
+            // Refresh global list so product pages see latest flags
+            dispatch(fetchProductsAction({}))
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+    }
+
+    const toggleSelected = (productId) => {
+        setSelectedIds((prev) => prev.includes(productId)
+            ? prev.filter((id) => id !== productId)
+            : [...prev, productId])
+    }
+
+    const togglePageSelection = () => {
+        const pageIds = paginatedProducts.map((product) => product._id)
+        const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id))
+        setSelectedIds((prev) => allSelected
+            ? prev.filter((id) => !pageIds.includes(id))
+            : [...new Set([...prev, ...pageIds])])
+    }
+
+    const applyBulkEdit = async () => {
+        if (!selectedIds.length) {
+            toast.error('Select at least one product')
+            return
+        }
+        const payload = { productIds: selectedIds }
+        if (bulkStock === 'in') payload.inStock = true
+        if (bulkStock === 'out') payload.inStock = false
+        if (bulkListing === 'online' || bulkListing === 'draft') payload.listingStatus = bulkListing
+        if (payload.inStock === undefined && !payload.listingStatus) {
+            toast.error('Choose a stock or listing change')
+            return
+        }
+
+        try {
+            setBulkSaving(true)
+            const token = await getToken()
+            const { data } = await axios.post('/api/store/products/bulk', payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            })
+            if (!data.matched) {
+                toast.error('No products were updated')
+                return
+            }
+            setProducts((prev) => prev.map((product) => {
+                if (!selectedIds.includes(product._id)) return product
+                return {
+                    ...product,
+                    ...(payload.inStock !== undefined ? { inStock: payload.inStock } : {}),
+                    ...(payload.listingStatus ? { listingStatus: payload.listingStatus } : {}),
+                }
+            }))
+            setSelectedIds([])
+            setBulkStock('')
+            setBulkListing('')
+            dispatch(fetchProductsAction({}))
+            toast.success(`Updated ${data.matched} products`)
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        } finally {
+            setBulkSaving(false)
+        }
+    }
+
+    const handleEdit = (product) => {
+        setEditingProduct(product)
+        setShowEditModal(true)
+    }
+
+    const handleDelete = async (productId) => {
+        if (!confirm('Are you sure you want to delete this product?')) return
+        
+        try {
+            const token = await getToken()
+            await axios.delete(`/api/store/product?productId=${productId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            setProducts(prevProducts => prevProducts.filter(p => p._id !== productId))
+            toast.success('Product deleted successfully')
+        } catch (error) {
+            toast.error(error?.response?.data?.error || error.message)
+        }
+    }
+
+    const handleUpdateSuccess = (updatedProduct) => {
+        setProducts(prevProducts => prevProducts.map(p => 
+            p._id === updatedProduct._id ? updatedProduct : p
+        ))
+        setShowEditModal(false)
+        setEditingProduct(null)
+        // Refresh global Redux product list so frontend always uses latest slug
+        dispatch(fetchProductsAction({}));
+    }
+
+    useEffect(() => {
+        if(user){
+            fetchStoreProducts()
+            fetchGlobalBuyNowSetting()
+        }  
+    }, [user])
+
+    useEffect(() => {
+        setCurrentPage(1)
+    }, [buyNowFilter, audienceFilter, listingFilter, pageSize])
+
+    useEffect(() => {
+        if (currentPage > totalPages) {
+            setCurrentPage(totalPages)
+        }
+    }, [currentPage, totalPages])
+
+    if (loading) return <Loading />
+
+    return (
+        <>
+            <div className="mb-5 flex items-center justify-between gap-3">
+                <h1 className="text-2xl text-slate-500">Manage <span className="text-slate-800 font-medium">Products</span></h1>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setBuyNowGlobalDraft(buyNowGlobalEnabled)
+                        setShowBuyNowSettingsModal(true)
+                    }}
+                    className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition"
+                >
+                    Buy Now Settings
+                </button>
+            </div>
+
+            {!buyNowGlobalEnabled && (
+                <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Global Buy Now is disabled. Buy Now button will not show on product pages for any product.
+                </div>
+            )}
+
+            <div className="flex items-center gap-2 mb-4">
+                <button
+                    onClick={() => setBuyNowFilter('all')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${buyNowFilter === 'all' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    All ({products.length})
+                </button>
+                <button
+                    onClick={() => setBuyNowFilter('enabled')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${buyNowFilter === 'enabled' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Buy Now On ({products.filter((p) => p.showBuyButton === true).length})
+                </button>
+                <button
+                    onClick={() => setBuyNowFilter('disabled')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${buyNowFilter === 'disabled' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Buy Now Off ({products.filter((p) => p.showBuyButton !== true).length})
+                </button>
+            </div>
+
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <button
+                    onClick={() => setAudienceFilter('all')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${audienceFilter === 'all' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Audience: All ({products.length})
+                </button>
+                <button
+                    onClick={() => setAudienceFilter('men')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${audienceFilter === 'men' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Men ({products.filter((p) => Array.isArray(p.targetAudience) && p.targetAudience.includes('men')).length})
+                </button>
+                <button
+                    onClick={() => setAudienceFilter('women')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${audienceFilter === 'women' ? 'bg-pink-600 text-white border-pink-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Women ({products.filter((p) => Array.isArray(p.targetAudience) && p.targetAudience.includes('women')).length})
+                </button>
+                <button
+                    onClick={() => setAudienceFilter('kids')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${audienceFilter === 'kids' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Kids ({products.filter((p) => Array.isArray(p.targetAudience) && p.targetAudience.includes('kids')).length})
+                </button>
+            </div>
+
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <p className="mr-2 text-sm font-semibold text-slate-800">Bulk edit</p>
+                <span className="text-sm text-slate-500">{selectedIds.length} selected</span>
+                <select
+                    value={bulkStock}
+                    onChange={(e) => setBulkStock(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700"
+                >
+                    <option value="">Stock: no change</option>
+                    <option value="in">In stock</option>
+                    <option value="out">Out of stock</option>
+                </select>
+                <select
+                    value={bulkListing}
+                    onChange={(e) => setBulkListing(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700"
+                >
+                    <option value="">Listing: no change</option>
+                    <option value="online">Online</option>
+                    <option value="draft">Draft</option>
+                </select>
+                <button
+                    type="button"
+                    onClick={applyBulkEdit}
+                    disabled={bulkSaving || selectedIds.length === 0}
+                    className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                    {bulkSaving ? 'Saving...' : 'Apply'}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setSelectedIds(filteredProducts.map((product) => product._id))}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                    Select filtered
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setSelectedIds([])}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                    Clear
+                </button>
+            </div>
+
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <button
+                    onClick={() => setListingFilter('all')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${listingFilter === 'all' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Listing: All
+                </button>
+                <button
+                    onClick={() => setListingFilter('online')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${listingFilter === 'online' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Online ({products.filter((p) => p.listingStatus !== 'draft').length})
+                </button>
+                <button
+                    onClick={() => setListingFilter('draft')}
+                    className={`px-3 py-1.5 text-sm rounded-lg border transition ${listingFilter === 'draft' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                >
+                    Draft ({products.filter((p) => p.listingStatus === 'draft').length})
+                </button>
+            </div>
+
+            <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-sm text-slate-600">
+                    Showing {filteredProducts.length === 0 ? 0 : startIndex + 1}-{endIndex} of {filteredProducts.length}
+                </p>
+                <div className="flex items-center gap-2">
+                    <label htmlFor="pageSize" className="text-sm text-slate-600">Show</label>
+                    <select
+                        id="pageSize"
+                        value={pageSize}
+                        onChange={(e) => setPageSize(Number(e.target.value))}
+                        className="px-2.5 py-1.5 text-sm rounded-lg border border-slate-300 bg-white text-slate-700"
+                    >
+                        <option value={20}>20</option>
+                        <option value={40}>40</option>
+                    </select>
+                    <span className="text-sm text-slate-600">per page</span>
+                </div>
+            </div>
+
+            <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm">
+                <table className="min-w-[1160px] w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-gray-700 uppercase tracking-wider">
+                        <tr>
+                            <th className="px-4 py-3 w-[44px]">
+                                <input
+                                    type="checkbox"
+                                    aria-label="Select products on this page"
+                                    checked={paginatedProducts.length > 0 && paginatedProducts.every((product) => selectedIds.includes(product._id))}
+                                    onChange={togglePageSelection}
+                                />
+                            </th>
+                            <th className="px-4 py-3 w-[240px]">Name</th>
+                            <th className="px-4 py-3 hidden lg:table-cell w-[120px]">SKU</th>
+                            <th className="px-4 py-3 hidden xl:table-cell w-[170px]">Barcode</th>
+                            <th className="px-4 py-3 hidden md:table-cell w-[260px]">Description</th>
+                            <th className="px-4 py-3 hidden md:table-cell w-[120px] text-right">AED</th>
+                            <th className="px-4 py-3 w-[120px] text-right">Price</th>
+                            <th className="px-4 py-3 w-[140px]">Category</th>
+                            <th className="px-4 py-3 hidden sm:table-cell w-[120px] text-center">Fast Delivery</th>
+                            <th className="px-4 py-3 hidden sm:table-cell w-[110px] text-center">Enquiry</th>
+                            <th className="px-4 py-3 hidden sm:table-cell w-[120px] text-center">Buy Now</th>
+                            <th className="px-4 py-3 w-[90px] text-center">Stock</th>
+                            <th className="px-4 py-3 w-[90px] text-center">Listing</th>
+                            <th className="px-4 py-3 w-[140px]">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-slate-700">
+                        {paginatedProducts.map((product, idx) => (
+                            <tr key={product._id} className={`border-t border-gray-200 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'} hover:bg-gray-50`}>
+                                <td className="px-4 py-3">
+                                    <input
+                                        type="checkbox"
+                                        aria-label={`Select ${product.name}`}
+                                        checked={selectedIds.includes(product._id)}
+                                        onChange={() => toggleSelected(product._id)}
+                                    />
+                                </td>
+                                <td className="px-4 py-3">
+                                    <div className="flex gap-2 items-center min-w-[220px]">
+                                        <Image
+                                            width={40}
+                                            height={40}
+                                            className="p-1 shadow rounded bg-white object-cover"
+                                            src={product.images?.[0] || 'https://ik.imagekit.io/jrstupuke/placeholder.png'}
+                                            alt={product.name}
+                                        />
+                                        <span className="font-medium text-slate-900 truncate block">{product.name}</span>
+                                    </div>
+                                </td>
+                                <td className="px-4 py-3 text-slate-600 hidden lg:table-cell">{product.sku || '-'}</td>
+                                <td className="px-4 py-3 text-slate-600 hidden xl:table-cell">{product.barcode || '-'}</td>
+                                <td className="px-4 py-3 max-w-md text-slate-600 hidden md:table-cell truncate">
+                                    {product.description?.replace(/<[^>]*>/g, ' ').trim().substring(0, 100)}...
+                                </td>
+                                <td className="px-4 py-3 hidden md:table-cell text-right">{currency} {product.AED.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right">{currency} {product.price.toLocaleString()}</td>
+                                <td className="px-4 py-3">{product.category || '-'}</td>
+                                <td className="px-4 py-3 hidden sm:table-cell">
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            onChange={() => toast.promise(toggleFastDelivery(product._id), { loading: "Updating..." })}
+                                            checked={product.fastDelivery || false}
+                                        />
+                                        <div className="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:bg-blue-600 transition-colors duration-200"></div>
+                                        <span className="dot absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform duration-200 ease-in-out peer-checked:translate-x-4"></span>
+                                    </label>
+                                </td>
+                                <td className="px-4 py-3 hidden sm:table-cell">
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            onChange={() => toast.promise(toggleEnquiry(product._id), { loading: "Updating..." })}
+                                            checked={product.enableEnquiry || false}
+                                        />
+                                        <div className="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:bg-purple-600 transition-colors duration-200"></div>
+                                        <span className="dot absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform duration-200 ease-in-out peer-checked:translate-x-4"></span>
+                                    </label>
+                                </td>
+                                <td className="px-4 py-3 hidden sm:table-cell">
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            onChange={() => toast.promise(toggleBuyNow(product._id), { loading: "Updating..." })}
+                                            checked={product.showBuyButton === true}
+                                        />
+                                        <div className="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:bg-indigo-600 transition-colors duration-200"></div>
+                                        <span className="dot absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform duration-200 ease-in-out peer-checked:translate-x-4"></span>
+                                    </label>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" className="sr-only peer" onChange={() => toast.promise(toggleStock(product._id), { loading: "Updating..." })} checked={product.inStock} />
+                                        <div className="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:bg-green-600 transition-colors duration-200"></div>
+                                        <span className="dot absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform duration-200 ease-in-out peer-checked:translate-x-4"></span>
+                                    </label>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${product.listingStatus === 'draft' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                        {product.listingStatus === 'draft' ? 'Draft' : 'Online'}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => handleEdit(product)}
+                                            className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition"
+                                        >
+                                            Edit
+                                        </button>
+                                        <button
+                                            onClick={() => handleDelete(product._id)}
+                                            className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition"
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                        {filteredProducts.length === 0 && (
+                            <tr>
+                                <td colSpan={14} className="px-4 py-10 text-center text-slate-500">
+                                    No products found for current filters.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {filteredProducts.length > 0 && (
+                <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                            type="button"
+                            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                            disabled={safeCurrentPage === 1}
+                            className={`px-3 py-1.5 text-sm rounded-lg border transition ${safeCurrentPage === 1 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                        >
+                            Previous
+                        </button>
+                        {getVisiblePageItems().map((item, idx) => {
+                            if (typeof item !== 'number') {
+                                return (
+                                    <span key={item + idx} className="px-1 text-slate-500 select-none">
+                                        ...
+                                    </span>
+                                )
+                            }
+
+                            return (
+                                <button
+                                    key={item}
+                                    type="button"
+                                    onClick={() => setCurrentPage(item)}
+                                    className={`min-w-9 px-3 py-1.5 text-sm rounded-lg border transition ${safeCurrentPage === item ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                                >
+                                    {item}
+                                </button>
+                            )
+                        })}
+                        <button
+                            type="button"
+                            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                            disabled={safeCurrentPage === totalPages}
+                            className={`px-3 py-1.5 text-sm rounded-lg border transition ${safeCurrentPage === totalPages ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                        >
+                            Next
+                        </button>
+                    </div>
+                    <p className="text-sm text-slate-600">
+                        Page {safeCurrentPage} of {totalPages}
+                    </p>
+                </div>
+            )}
+
+            {showEditModal && (
+                <ProductForm 
+                    product={editingProduct}
+                    onClose={() => {
+                        setShowEditModal(false)
+                        setEditingProduct(null)
+                    }}
+                    onSubmitSuccess={handleUpdateSuccess}
+                />
+            )}
+
+            {showBuyNowSettingsModal && (
+                <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowBuyNowSettingsModal(false)}>
+                    <div className="w-full max-w-md rounded-xl bg-white border border-slate-200 shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+                        <h2 className="text-lg font-semibold text-slate-900">Buy Now Global Settings</h2>
+                        <p className="text-sm text-slate-600 mt-1 mb-5">Control Buy Now button visibility for all products.</p>
+
+                        <label className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
+                            <div>
+                                <p className="text-sm font-medium text-slate-900">Enable Buy Now globally</p>
+                                <p className="text-xs text-slate-500">If disabled, Buy Now will be hidden on all product pages.</p>
+                            </div>
+                            <input
+                                type="checkbox"
+                                checked={buyNowGlobalDraft}
+                                onChange={(e) => setBuyNowGlobalDraft(e.target.checked)}
+                                className="w-5 h-5 accent-indigo-600"
+                            />
+                        </label>
+
+                        <div className="mt-6 flex items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowBuyNowSettingsModal(false)}
+                                className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={saveGlobalBuyNowSetting}
+                                disabled={savingBuyNowSettings}
+                                className={`px-4 py-2 text-sm rounded-lg text-white transition ${savingBuyNowSettings ? 'bg-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                            >
+                                {savingBuyNowSettings ? 'Saving...' : 'Save'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    )
+}

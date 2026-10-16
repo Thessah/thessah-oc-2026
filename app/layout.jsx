@@ -1,0 +1,88 @@
+import { Outfit } from "next/font/google";
+import "./globals.css";
+import Script from "next/script";
+import React from "react";
+import MetaPixel from "@/components/MetaPixel";
+import SocialProofPopup from "@/components/SocialProofPopup";
+import ClientLayout from "./ClientLayout";
+
+const outfit = Outfit({ subsets: ["latin"], weight: ["400", "500", "600"] });
+
+export const metadata = {
+  title: "Thessah Jewellery – Where Elegance Meets Craftsmanship",
+  description:
+    "Thessah Jewellery offers beautifully crafted designs made to shine forever. Find luxury jewellery pieces perfect for weddings, gifts, and everyday elegance.",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
+};
+// Performance optimization
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: '#ffffff',
+};
+
+export default function RootLayout({ children }) {
+  const ik = process.env.IMAGEKIT_URL_ENDPOINT;
+  let ikOrigin = null;
+  try {
+    if (ik) ikOrigin = new URL(ik).origin;
+  } catch {}
+
+  return (
+    <html lang="en">
+      <head>
+        <script
+          id="strip-bis-skin"
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var a='bis_skin_checked';function strip(n){if(n&&n.removeAttribute&&n.hasAttribute&&n.hasAttribute(a))n.removeAttribute(a)}function walk(r){if(!r||r.nodeType!==1)return;strip(r);if(!r.querySelectorAll)return;var list=r.querySelectorAll('['+a+']');for(var i=0;i<list.length;i++)strip(list[i])}walk(document.documentElement);new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var m=ms[i];if(m.type==='attributes')strip(m.target);var nodes=m.addedNodes;if(!nodes)continue;for(var j=0;j<nodes.length;j++)walk(nodes[j])}}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:[a]})})();`,
+          }}
+        />
+        {/* ImageKit Optimization */}
+        {ikOrigin && (
+          <>
+            <link rel="dns-prefetch" href={ikOrigin} />
+            <link rel="preconnect" href={ikOrigin} crossOrigin="anonymous" />
+          </>
+        )}
+        {/* Preload APIs to kick off fetch sooner */}
+        <link rel="preload" href="/api/store/hero-banners" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/categories" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/store/settings" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/store/collections" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/store/home-sections" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/store/grid-products" as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href="/api/store/section4" as="fetch" crossOrigin="anonymous" />
+      </head>
+      <body className={`${outfit.className} antialiased`} suppressHydrationWarning>
+        {/* Google Tag Manager (noscript must be immediately after <body>) */}
+        <noscript>
+          <iframe
+            src="https://www.googletagmanager.com/ns.html?id=GTM-5QLZ2255"
+            height="0"
+            width="0"
+            style={{ display: "none", visibility: "hidden" }}
+          />
+        </noscript>
+        {/* Google Tag Manager - load after interactive */}
+        <Script id="gtm" strategy="afterInteractive">
+          {`
+            (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+            new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+            j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+            'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+            })(window,document,'script','dataLayer','GTM-5QLZ2255');
+          `}
+        </Script>
+        <MetaPixel />
+        {/* Add Navbar and Footer globally via ClientLayout */}
+        <ClientLayout>{children}</ClientLayout>
+      </body>
+    </html>
+  );
+}

@@ -1,0 +1,20 @@
+import connectDB from "@/lib/mongoose";
+import Product from "@/models/Product";
+import { NextResponse } from "next/server";
+
+export async function GET(request) {
+    await connectDB();
+    const { searchParams } = new URL(request.url);
+    const slug = searchParams.get("slug");
+    if (!slug) {
+        return NextResponse.json({ error: "Missing slug" }, { status: 400 });
+    }
+    // Only select needed fields for performance
+    const product = await Product.findOne({ slug })
+        .select('name slug description shortDescription AED price images category sku barcode inStock listingStatus stockQuantity hasVariants variants attributes hasBulkPricing bulkPricing fastDelivery enableEnquiry showBuyButton showEnquiryButton allowReturn allowReplacement storeId createdAt updatedAt goldType goldWeight goldRate stoneWeight stonePrice makingCharges metalDetails generalDetails')
+        .lean();
+    if (!product || product.listingStatus === 'draft') {
+        return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+    return NextResponse.json({ product });
+}
