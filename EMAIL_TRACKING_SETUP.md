@@ -159,7 +159,7 @@ Add these to your `.env` file:
 
 \`\`\`env
 # Email Configuration (Required for sending emails)
-RESEND_API_KEY=re_xxxxxxxxxxxxx
+RESEND_API_KEY=
 EMAIL_FROM=orders@yourdomain.com
 
 # App URL (Required for email API calls)

@@ -60,8 +60,10 @@ This application sends automated emails to customers for various events using Re
 
 ### Environment Variables (.env)
 
+Set these in `.env` only. Do not commit that file.
+
 ```env
-RESEND_API_KEY=re_your_resend_api_key
+RESEND_API_KEY=
 EMAIL_FROM=onboarding@resend.dev
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_ADMIN_EMAIL=Thessah.com@gmail.com
